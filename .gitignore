@@ -1,0 +1,8 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv_pdi_tp3_dados/
+prueba_*.png
+prueba_*.mp4
+*_etiquetada_auto.mp4
