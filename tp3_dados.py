@@ -1,7 +1,52 @@
+import os
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 
-# --- Punto A: diferencia entre frames consecutivos -------------------
+# --- Configuración general ---
+
+mostrar_imagenes = True  # False para correr sin abrir ventanas
+
+carpeta_salida = "resultados_tiradas"
+carpeta_figuras = os.path.join(carpeta_salida, "figuras")
+os.makedirs(carpeta_figuras, exist_ok=True)
+
+
+def mostrar_paneles(imagenes, titulos, titulo_figura, nombre_archivo):
+    """Muestra (y guarda en resultados_tiradas/figuras) varias imágenes
+    lado a lado. Acepta imágenes BGR (color) o de un solo canal."""
+    fig, ejes = plt.subplots(1, len(imagenes), figsize=(5 * len(imagenes), 5))
+    ejes = np.atleast_1d(ejes)
+
+    for eje, imagen, titulo in zip(ejes, imagenes, titulos):
+        if imagen.ndim == 2:
+            eje.imshow(imagen, cmap="gray")
+        else:
+            eje.imshow(cv2.cvtColor(imagen, cv2.COLOR_BGR2RGB))
+        eje.set_title(titulo)
+        eje.axis("off")
+
+    fig.suptitle(titulo_figura)
+    fig.tight_layout()
+    fig.savefig(os.path.join(carpeta_figuras, nombre_archivo), dpi=120)
+
+    if mostrar_imagenes:
+        plt.show()
+    plt.close(fig)
+
+
+def dibujar_anotaciones(frame, anotaciones, grosor=2, escala_texto=0.45):
+    """Devuelve una copia del frame con las cajas y etiquetas dibujadas."""
+    copia = frame.copy()
+    for x, y, ancho, alto, texto in anotaciones:
+        cv2.rectangle(copia, (x, y), (x + ancho - 1, y + alto - 1),
+                      (0, 255, 0), grosor)
+        cv2.putText(copia, texto, (x, y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, escala_texto, (0, 255, 0), 1)
+    return copia
+
+
+# --- Punto A: diferencia entre frames consecutivos ---
 
 cap = cv2.VideoCapture("tirada_1.mp4")
 
@@ -11,7 +56,7 @@ if not cap.isOpened():
 gris_anterior = None
 numero_frame = 0
 diferencias_por_frame = []
-mostrar_imagenes = False
+paneles_prueba_1 = []  # (frame, diferencia, título) de los frames 45 y 70
 
 while True:
     ret, frame = cap.read()
@@ -27,18 +72,18 @@ while True:
         promedio = np.mean(diferencia)
         diferencias_por_frame.append((numero_frame, promedio))
 
-        # --- Prueba 1: comparar movimiento y reposo ------------------
+        # --- Prueba 1: comparar movimiento y reposo ---
         # 44 -> 45: dados en movimiento. En la Mac dio 2.825.
         # 69 -> 70: dados quietos. En la Mac dio 0.124.
         if numero_frame in (45, 70):
             print(f"Frames {numero_frame - 1} y {numero_frame}: {promedio:.3f}")
 
-            if mostrar_imagenes:
-                cv2.imshow("Frame actual", frame_chico)
-                cv2.imshow("Diferencia con el anterior", diferencia)
-                cv2.waitKey(3000)
+            paneles_prueba_1.append(
+                (frame_chico.copy(), diferencia.copy(),
+                 f"Frames {numero_frame - 1}→{numero_frame} (dif. media {promedio:.3f})")
+            )
 
-    # --- Prueba 4: segmentar los dados rojos en el frame 70 ------------
+    # --- Prueba 4: segmentar los dados rojos en el frame 70 ---
     if numero_frame == 70:
         frame_hsv = cv2.cvtColor(frame_chico, cv2.COLOR_BGR2HSV)
 
@@ -46,8 +91,8 @@ while True:
         rojo_alto = cv2.inRange(frame_hsv, (170, 120, 60), (179, 255, 255))
         mascara_roja = np.uint8(np.logical_or(rojo_bajo, rojo_alto)) * 255
 
-        guardado_frame = cv2.imwrite("prueba_frame_70.png", frame_chico)
-        guardada_mascara = cv2.imwrite("prueba_mascara_roja_70.png", mascara_roja)
+        guardado_frame = cv2.imwrite(os.path.join(carpeta_figuras, "prueba_frame_70.png"), frame_chico)
+        guardada_mascara = cv2.imwrite(os.path.join(carpeta_figuras, "prueba_mascara_roja_70.png"), mascara_roja)
         print(f"Frame guardado: {guardado_frame} | Máscara guardada: {guardada_mascara}")
 
     gris_anterior = gris_actual
@@ -55,13 +100,21 @@ while True:
 
 cap.release()
 
-if mostrar_imagenes:
-    cv2.destroyAllWindows()
-
 print(f"\nFrames leídos: {numero_frame}")
 numero_frame_total = numero_frame
 
-# --- Prueba 2: comparar umbrales sobre el video completo --------------
+# Figura de la Prueba 1: dados en movimiento vs. dados quietos
+if len(paneles_prueba_1) == 2:
+    mostrar_paneles(
+        [paneles_prueba_1[0][0], paneles_prueba_1[0][1],
+         paneles_prueba_1[1][0], paneles_prueba_1[1][1]],
+        ["Frame 45 (movimiento)", paneles_prueba_1[0][2],
+         "Frame 70 (reposo)", paneles_prueba_1[1][2]],
+        "Prueba 1: diferencia entre frames consecutivos",
+        "01_movimiento_vs_reposo.png",
+    )
+
+# --- Prueba 2: comparar umbrales sobre el video completo ---
 
 umbrales = [0.20, 0.30, 0.40, 0.50, 0.60, 1.00]
 umbral_inicial = 0.30
@@ -79,7 +132,7 @@ for umbral in umbrales:
     if umbral == umbral_inicial:
         candidatos_umbral_inicial = frames_candidatos
 
-# --- Prueba 3: agrupar frames candidatos consecutivos -----------------
+# --- Prueba 3: agrupar frames candidatos consecutivos ---
 
 minimo_consecutivos = 5
 tramos = []
@@ -96,10 +149,29 @@ for inicio, fin in tramos:
     if cantidad >= minimo_consecutivos:
         print(f"Tramo candidato: frames {inicio} a {fin} ({cantidad} frames)")
 
-# --- Prueba 5: detectar los dados en la máscara del frame 70 ---------
+# Gráfico de la diferencia media por frame con el umbral y los tramos
+fig, eje = plt.subplots(figsize=(10, 4))
+eje.plot([f for f, _ in diferencias_por_frame],
+         [d for _, d in diferencias_por_frame], label="Diferencia media")
+eje.axhline(umbral_inicial, color="r", linestyle="--",
+            label=f"Umbral {umbral_inicial}")
+for inicio, fin in tramos:
+    if fin - inicio + 1 >= minimo_consecutivos:
+        eje.axvspan(inicio, fin, color="green", alpha=0.25)
+eje.set_xlabel("Frame")
+eje.set_ylabel("Diferencia media (niveles de gris)")
+eje.set_title("Prueba 3: tramos con dados en reposo (tirada_1)")
+eje.legend()
+fig.tight_layout()
+fig.savefig(os.path.join(carpeta_figuras, "03_diferencias_y_tramos.png"), dpi=120)
+if mostrar_imagenes:
+    plt.show()
+plt.close(fig)
 
-mascara_70 = cv2.imread("prueba_mascara_roja_70.png", cv2.IMREAD_GRAYSCALE)
-frame_con_cajas = cv2.imread("prueba_frame_70.png")
+# --- Prueba 5: detectar los dados en la máscara del frame 70 ---
+
+mascara_70 = cv2.imread(os.path.join(carpeta_figuras, "prueba_mascara_roja_70.png"), cv2.IMREAD_GRAYSCALE)
+frame_con_cajas = cv2.imread(os.path.join(carpeta_figuras, "prueba_frame_70.png"))
 
 if mascara_70 is None or frame_con_cajas is None:
     raise SystemExit("No se pudieron leer los PNG de la Prueba 4")
@@ -129,9 +201,16 @@ for etiqueta in range(1, num_labels):
         )
 
 print(f"Dados candidatos en el frame 70: {cantidad_dados}")
-cv2.imwrite("prueba_dados_detectados_70.png", frame_con_cajas)
+cv2.imwrite(os.path.join(carpeta_figuras, "prueba_dados_detectados_70.png"), frame_con_cajas)
 
-# --- Prueba 6: comparar umbrales en un solo dado ---------------------
+mostrar_paneles(
+    [cv2.imread(os.path.join(carpeta_figuras, "prueba_frame_70.png")), mascara_70, frame_con_cajas],
+    ["Frame 70", "Máscara roja (HSV)", f"Dados detectados: {cantidad_dados}"],
+    "Pruebas 4 y 5: segmentación y detección de los dados",
+    "05_segmentacion_y_deteccion.png",
+)
+
+# --- Prueba 6: comparar umbrales en un solo dado ---
 
 def contar_puntos(dado, umbral, area_minima=3):
     alto, ancho = dado.shape[:2]
@@ -161,17 +240,28 @@ def contar_puntos(dado, umbral, area_minima=3):
     return cantidad_puntos, mascara_puntos
 
 
-frame_original_70 = cv2.imread("prueba_frame_70.png")
+frame_original_70 = cv2.imread(os.path.join(carpeta_figuras, "prueba_frame_70.png"))
 
 x, y, ancho, alto, _ = stats[1]
 dado_de_prueba = frame_original_70[y:y + alto, x:x + ancho]
 
+paneles_umbrales = [dado_de_prueba]
+titulos_umbrales = ["Dado recortado"]
+
 for umbral in [100, 160, 220]:
     cantidad, mascara = contar_puntos(dado_de_prueba, umbral)
     print(f"Umbral {umbral}: {cantidad} puntos candidatos")
-    cv2.imwrite(f"prueba_puntos_umbral_{umbral}.png", mascara)
+    cv2.imwrite(os.path.join(carpeta_figuras, f"prueba_puntos_umbral_{umbral}.png"), mascara)
+    paneles_umbrales.append(mascara)
+    titulos_umbrales.append(f"Umbral {umbral}: {cantidad} puntos")
 
-# --- Prueba 7: leer y etiquetar los cinco dados ----------------------
+mostrar_paneles(
+    paneles_umbrales, titulos_umbrales,
+    "Prueba 6: umbral para segmentar los puntos de un dado",
+    "06_umbrales_puntos.png",
+)
+
+# --- Prueba 7: leer y etiquetar los cinco dados ---
 
 umbral_puntos_elegido = 160
 frame_etiquetado = frame_con_cajas.copy()
@@ -195,9 +285,16 @@ for etiqueta in range(1, num_labels):
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1
         )
 
-cv2.imwrite("prueba_dados_etiquetados_70.png", frame_etiquetado)
+cv2.imwrite(os.path.join(carpeta_figuras, "prueba_dados_etiquetados_70.png"), frame_etiquetado)
 
-# --- Prueba 8: verificar los centroides en el tramo candidato --------
+mostrar_paneles(
+    [frame_etiquetado],
+    ["Frame 70 con id y valor de cada dado"],
+    "Prueba 7: lectura de los cinco dados",
+    "07_dados_etiquetados_70.png",
+)
+
+# --- Prueba 8: verificar los centroides en el tramo candidato ---
 
 def obtener_centros_dados(frame_reducido):
     hsv = cv2.cvtColor(frame_reducido, cv2.COLOR_BGR2HSV)
@@ -267,7 +364,7 @@ for indice in range(numero_frame_total):
 cap_prueba.release()
 print("Frames con los cinco dados estables:", frames_estables)
 
-# --- Prueba 10: encontrar automáticamente el tramo estable -----------
+# --- Prueba 10: encontrar automáticamente el tramo estable ---
 
 def coinciden_centros(referencia, actuales, tolerancia):
     if len(actuales) < 5:
@@ -324,7 +421,7 @@ if mejor_inicio is not None:
           f"({mejor_cantidad} frames)")
     print(f"Frame sugerido para leer los valores: {frame_central}")
 
-# --- Leer los dados del frame elegido automáticamente ----------------
+# --- Leer los dados del frame elegido automáticamente ---
 
 if mejor_inicio is None:
     raise SystemExit("No se encontró un tramo estable para exportar")
@@ -368,9 +465,20 @@ for etiqueta in range(1, num_comp):
         anotaciones_auto.append((x, y, ancho, alto, texto))
 
 valores_auto = [texto for x, y, ancho, alto, texto in anotaciones_auto]
+print(f"\n=== tirada_1.mp4 ===")
+print(f"Frames con dados en reposo: {mejor_inicio} a {mejor_fin}")
 print(f"Valores del frame {frame_central}:", ", ".join(valores_auto))
 
-# --- Prueba 9: exportar una tirada con los dados etiquetados ----------
+mostrar_paneles(
+    [frame_central_chico, mascara_central,
+     dibujar_anotaciones(frame_central_chico, anotaciones_auto)],
+    [f"Frame central ({frame_central})", "Máscara roja",
+     "Resultado: " + ", ".join(valores_auto)],
+    "tirada_1: frame elegido automáticamente",
+    "10_tirada_1_resultado.png",
+)
+
+# --- Prueba 9: exportar una tirada con los dados etiquetados ---
 
 def exportar_tirada(ruta, inicio, fin, cuadro_central, anotaciones):
     cap_video = cv2.VideoCapture(ruta)
@@ -386,7 +494,8 @@ def exportar_tirada(ruta, inicio, fin, cuadro_central, anotaciones):
     escala_x = ancho_video / ancho_reducido
     escala_y = alto_video / alto_reducido
 
-    ruta_salida = f"{ruta[:-4]}_etiquetada_auto.mp4"
+    nombre_base = os.path.splitext(os.path.basename(ruta))[0]
+    ruta_salida = os.path.join(carpeta_salida, f"{nombre_base}_etiquetada.mp4")
     salida = cv2.VideoWriter(
         ruta_salida,
         cv2.VideoWriter_fourcc(*"mp4v"),
@@ -432,7 +541,7 @@ exportar_tirada(
     "tirada_1.mp4", mejor_inicio, mejor_fin, frame_central_chico, anotaciones_auto
 )
 
-# --- Prueba 11: buscar tramos estables en las otras tiradas ----------
+# --- Prueba 11: buscar tramos estables en las otras tiradas ---
 
 for ruta in ["tirada_2.mp4", "tirada_3.mp4", "tirada_4.mp4"]:
     cap_otra = cv2.VideoCapture(ruta)
@@ -463,7 +572,9 @@ for ruta in ["tirada_2.mp4", "tirada_3.mp4", "tirada_4.mp4"]:
 
     fin = inicio + cantidad - 1
     central = (inicio + fin) // 2
-    print(f"{ruta}: frames {inicio} a {fin} ({cantidad} frames), frame central {central}")
+    print(f"\n=== {ruta} ===")
+    print(f"Frames con dados en reposo: {inicio} a {fin} "
+          f"({cantidad} frames), frame central {central}")
 
     # --- Prueba 12: comparar umbrales de puntos en el cuadro central ---
     cap_central = cv2.VideoCapture(ruta)
@@ -509,7 +620,7 @@ for ruta in ["tirada_2.mp4", "tirada_3.mp4", "tirada_4.mp4"]:
 
         print(f"  Umbral {umbral}: {valores}")
 
-    # --- Prueba 13: comparar áreas mínimas con umbral 175 -------------
+    # --- Prueba 13: comparar áreas mínimas con umbral 175 ---
     for area_minima in [3, 5, 6]:
         valores = []
 
@@ -519,7 +630,7 @@ for ruta in ["tirada_2.mp4", "tirada_3.mp4", "tirada_4.mp4"]:
 
         print(f"  Área mínima {area_minima} px: {valores}")
 
-        # --- Exportar la tirada con los parámetros elegidos -------------
+    # --- Exportar la tirada con los parámetros elegidos ---
     anotaciones_tirada = []
 
     for id_dado, dado in enumerate(recortes_dados, start=1):
@@ -531,5 +642,15 @@ for ruta in ["tirada_2.mp4", "tirada_3.mp4", "tirada_4.mp4"]:
 
     valores_finales = [texto for x, y, ancho, alto, texto in anotaciones_tirada]
     print(f"Valores finales de {ruta}:", ", ".join(valores_finales))
-    exportar_tirada(ruta, inicio, fin, cuadro_central, anotaciones_tirada)
 
+    nombre_tirada = os.path.splitext(os.path.basename(ruta))[0]
+    mostrar_paneles(
+        [cuadro_central, mascara,
+         dibujar_anotaciones(cuadro_central, anotaciones_tirada)],
+        [f"Frame central ({central})", "Máscara roja",
+         "Resultado: " + ", ".join(valores_finales)],
+        f"{nombre_tirada}: frame elegido automáticamente",
+        f"11_{nombre_tirada}_resultado.png",
+    )
+
+    exportar_tirada(ruta, inicio, fin, cuadro_central, anotaciones_tirada)
