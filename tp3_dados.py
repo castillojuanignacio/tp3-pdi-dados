@@ -45,6 +45,61 @@ def dibujar_anotaciones(frame, anotaciones, grosor=2, escala_texto=0.45):
                     cv2.FONT_HERSHEY_SIMPLEX, escala_texto, (0, 255, 0), 1)
     return copia
 
+def grafico_estabilidad(centros_por_frame, inicio, fin, nombre, tolerancia=1.0):
+    cantidades = [len(c) for c in centros_por_frame]
+    desplazamientos = [np.nan]
+    for previo, actual in zip(centros_por_frame[:-1], centros_por_frame[1:]):
+        if len(previo) == 5 and len(actual) == 5:
+            d = [np.sqrt(((actual - p) ** 2).sum(axis=1)).min() for p in previo]
+            desplazamientos.append(max(d))
+        else:
+            desplazamientos.append(np.nan)
+    desplazamientos = np.clip(desplazamientos, 0.01, None)
+
+    fig, (eje1, eje2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    eje1.plot(cantidades)
+    eje1.axhline(5, color="gray", linestyle=":")
+    eje1.set_ylabel("Dados detectados")
+    eje1.set_title(f"{nombre}: estabilidad de los dados")
+    eje2.semilogy(desplazamientos)
+    eje2.axhline(tolerancia, color="r", linestyle="--", label=f"Tolerancia {tolerancia} px")
+    eje2.set_ylabel("Desplazamiento máximo (px)")
+    eje2.set_xlabel("Frame")
+    eje2.legend()
+    for eje in (eje1, eje2):
+        eje.axvspan(inicio, fin, color="green", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(os.path.join(carpeta_figuras, f"08_estabilidad_{nombre}.png"), dpi=120)
+    if mostrar_imagenes:
+        plt.show()
+    plt.close(fig)
+
+# --- Información de los videos ---
+videos = ["tirada_1.mp4", "tirada_2.mp4", "tirada_3.mp4", "tirada_4.mp4"]
+
+print(f"{'Video':<14}{'Resolución':<14}{'FPS':<8}{'Frames':<9}{'Duración (s)':<13}{'Reducido (1/3)'}")
+
+for ruta in videos:
+    cap = cv2.VideoCapture(ruta)
+    if not cap.isOpened():
+        print(f"{ruta:<14}No se pudo abrir")
+        continue
+
+    ancho = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    alto = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+
+    frames = 0
+    while True:
+        ret, _ = cap.read()
+        if not ret:
+            break
+        frames += 1
+    cap.release()
+
+    duracion = frames / fps if fps else float("nan")
+    print(f"{ruta:<14}{f'{ancho}x{alto}':<14}{fps:<8.2f}{frames:<9}{duracion:<13.2f}{ancho // 3}x{alto // 3}")
+
 
 # --- Punto A: diferencia entre frames consecutivos ---
 
@@ -73,8 +128,8 @@ while True:
         diferencias_por_frame.append((numero_frame, promedio))
 
         # --- Prueba 1: comparar movimiento y reposo ---
-        # 44 -> 45: dados en movimiento. En la Mac dio 2.825.
-        # 69 -> 70: dados quietos. En la Mac dio 0.124.
+        # 44 -> 45: dados en movimiento (2.822)
+        # 69 -> 70: dados quietos (0.120)
         if numero_frame in (45, 70):
             print(f"Frames {numero_frame - 1} y {numero_frame}: {promedio:.3f}")
 
@@ -83,7 +138,7 @@ while True:
                  f"Frames {numero_frame - 1}→{numero_frame} (dif. media {promedio:.3f})")
             )
 
-    # --- Prueba 4: segmentar los dados rojos en el frame 70 ---
+    # --- Prueba 2: segmentar los dados rojos en el frame 70 ---
     if numero_frame == 70:
         frame_hsv = cv2.cvtColor(frame_chico, cv2.COLOR_BGR2HSV)
 
@@ -317,6 +372,7 @@ def obtener_centros_dados(frame_reducido):
 
 centros_referencia = obtener_centros_dados(frame_original_70)
 tolerancia = 1.0
+mostrar_detalle_frames = False  # True para ver el detalle de cada frame
 
 cap_prueba = cv2.VideoCapture("tirada_1.mp4")
 if not cap_prueba.isOpened():
@@ -333,10 +389,11 @@ for indice in range(numero_frame_total):
     alto, ancho = frame.shape[:2]
     reducido = cv2.resize(frame, (ancho // 3, alto // 3))
     centros_actuales = obtener_centros_dados(reducido)
-    centros_por_frame.append(centros_actuales)    
+    centros_por_frame.append(centros_actuales)
 
     if len(centros_referencia) != 5 or len(centros_actuales) < 5:
-        print(f"Frame {indice}: {len(centros_actuales)} dados candidatos")
+        if mostrar_detalle_frames:
+            print(f"Frame {indice}: {len(centros_actuales)} dados candidatos")
         continue
 
     indices_asociados = []
@@ -354,12 +411,13 @@ for indice in range(numero_frame_total):
     distancia_maxima = max(distancias_minimas)
     cinco_distintos = len(set(indices_asociados)) == 5
     estable = cinco_distintos and distancia_maxima <= tolerancia
-        
+
     if estable:
         frames_estables.append(indice)
 
-    print(f"Frame {indice}: distancia máxima {distancia_maxima:.2f} px "
-          f"| Posiciones estables: {estable}")
+    if mostrar_detalle_frames:
+        print(f"Frame {indice}: distancia máxima {distancia_maxima:.2f} px "
+              f"| Posiciones estables: {estable}")
 
 cap_prueba.release()
 print("Frames con los cinco dados estables:", frames_estables)
@@ -420,6 +478,7 @@ if mejor_inicio is not None:
     print(f"Tramo automático: frames {mejor_inicio} a {mejor_fin} "
           f"({mejor_cantidad} frames)")
     print(f"Frame sugerido para leer los valores: {frame_central}")
+    grafico_estabilidad(centros_por_frame, mejor_inicio, mejor_fin, "tirada_1")
 
 # --- Leer los dados del frame elegido automáticamente ---
 
