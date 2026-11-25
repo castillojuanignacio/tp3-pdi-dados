@@ -215,7 +215,7 @@ for inicio, fin in tramos:
         eje.axvspan(inicio, fin, color="green", alpha=0.25)
 eje.set_xlabel("Frame")
 eje.set_ylabel("Diferencia media (niveles de gris)")
-eje.set_title("Prueba 3: tramos con dados en reposo (tirada_1)")
+eje.set_title("Prueba 3: tramos candidatos de reposo (tirada_1)")
 eje.legend()
 fig.tight_layout()
 fig.savefig(os.path.join(carpeta_figuras, "03_diferencias_y_tramos.png"), dpi=120)
